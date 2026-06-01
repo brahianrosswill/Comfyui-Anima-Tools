@@ -1,0 +1,94 @@
+{
+  "AnimaArtistTagSelector": {
+    "display_name": "Anima Artist Tag Selector",
+    "description": "Select multiple artist style tags visually through an advanced preview grid panel.",
+    "inputs": {
+      "artist_tags": {
+        "name": "Artist Tags",
+        "tooltip": "The selected artist tags list, formatted as @artist_name."
+      },
+      "mode": {
+        "name": "Concatenation Mode",
+        "tooltip": "Append selected tags to optional input prompt, or override it completely.",
+        "values": {
+          "append": "Append",
+          "override": "Override"
+        }
+      },
+      "opt_prompt": {
+        "name": "Optional Prompt",
+        "tooltip": "An optional input prompt text slot to merge with selected tags."
+      }
+    },
+    "outputs": {
+      "0": { "name": "text" }
+    }
+  },
+  "AnimaArtistTagSelectorPlus": {
+    "display_name": "Anima Artist Tag Selector+",
+    "description": "Enhanced Artist Tag Selector, automatically concatenating artist tags and extra custom text via a custom separator.",
+    "inputs": {
+      "artist_tags": {
+        "name": "Artist Tags",
+        "tooltip": "The selected artist tags list, formatted as @artist_name."
+      },
+      "extra_text": {
+        "name": "Custom Text",
+        "tooltip": "A custom prompt text input below the artist tags."
+      },
+      "separator": {
+        "name": "Separator",
+        "tooltip": "The delimiter used to join both sections, defaults to ', '."
+      }
+    },
+    "outputs": {
+      "0": { "name": "text" }
+    }
+  },
+  "AnimaCharacterTagSelector": {
+    "display_name": "Anima Character Tag Selector",
+    "description": "Select multiple anime character tags visually through an advanced preview grid panel.",
+    "inputs": {
+      "character_tags": {
+        "name": "Character Tags",
+        "tooltip": "The selected character tags list, separated by commas."
+      },
+      "mode": {
+        "name": "Concatenation Mode",
+        "tooltip": "Append selected tags to optional input prompt, or override it completely.",
+        "values": {
+          "append": "Append",
+          "override": "Override"
+        }
+      },
+      "opt_prompt": {
+        "name": "Optional Prompt",
+        "tooltip": "An optional input prompt text slot to merge with selected tags."
+      }
+    },
+    "outputs": {
+      "0": { "name": "text" }
+    }
+  },
+  "AnimaCharacterTagSelectorPlus": {
+    "display_name": "Anima Character Tag Selector+",
+    "description": "Enhanced Character Tag Selector, automatically concatenating character tags and extra custom text via a custom separator.",
+    "inputs": {
+      "character_tags": {
+        "name": "Character Tags",
+        "tooltip": "The selected character tags list, separated by commas."
+      },
+      "extra_text": {
+        "name": "Custom Text",
+        "tooltip": "A custom prompt text input below the character tags."
+      },
+      "separator": {
+        "name": "Separator",
+        "tooltip": "The delimiter used to join both sections, defaults to ', '."
+      }
+    },
+    "outputs": {
+      "0": { "name": "text" }
+    }
+  }
+}

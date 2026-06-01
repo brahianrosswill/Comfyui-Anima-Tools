@@ -1,0 +1,94 @@
+{
+  "AnimaArtistTagSelector": {
+    "display_name": "Anima 画师 Tag 选择器",
+    "description": "通过高品质 3:4 视觉大图预览网格，选择并输出多个画师风格 Tag。",
+    "inputs": {
+      "artist_tags": {
+        "name": "画师 Tag",
+        "tooltip": "选中的画师列表，统一格式化为 @画师名称 格式。"
+      },
+      "mode": {
+        "name": "拼接模式",
+        "tooltip": "选择追加（Append）到外部 Prompt 后面，或是完全覆盖（Override）。",
+        "values": {
+          "append": "拼接",
+          "override": "覆盖"
+        }
+      },
+      "opt_prompt": {
+        "name": "可选输入 Prompt",
+        "tooltip": "一个可选的外部输入 Prompt 文本插槽，以便与选择的画师标签合并输出。"
+      }
+    },
+    "outputs": {
+      "0": { "name": "文本" }
+    }
+  },
+  "AnimaArtistTagSelectorPlus": {
+    "display_name": "Anima 画师 Tag 选择器+",
+    "description": "画师 Tag 选择器增强版，支持将画师标签与下方的自定义提示词文本，通过指定的分隔符自动拼接输出。",
+    "inputs": {
+      "artist_tags": {
+        "name": "画师 Tag",
+        "tooltip": "选中的画师列表，统一格式化为 @画师名称 格式。"
+      },
+      "extra_text": {
+        "name": "自定义文本",
+        "tooltip": "在画师输入框下面的自定义提示词或文本内容。"
+      },
+      "separator": {
+        "name": "分隔符",
+        "tooltip": "自动拼接两段文本时的分隔符，默认为 ', '。"
+      }
+    },
+    "outputs": {
+      "0": { "name": "文本" }
+    }
+  },
+  "AnimaCharacterTagSelector": {
+    "display_name": "Anima 角色 Tag 选择器",
+    "description": "通过高品质 3:4 视觉大图预览网格，选择并输出多个动漫角色 Tag。",
+    "inputs": {
+      "character_tags": {
+        "name": "角色 Tag",
+        "tooltip": "选中的角色列表，以逗号隔开。"
+      },
+      "mode": {
+        "name": "拼接模式",
+        "tooltip": "选择追加（Append）到外部 Prompt 后面，或是完全覆盖（Override）。",
+        "values": {
+          "append": "拼接",
+          "override": "覆盖"
+        }
+      },
+      "opt_prompt": {
+        "name": "可选输入 Prompt",
+        "tooltip": "一个可选的外部输入 Prompt 文本插槽，以便与选择的角色标签合并输出。"
+      }
+    },
+    "outputs": {
+      "0": { "name": "文本" }
+    }
+  },
+  "AnimaCharacterTagSelectorPlus": {
+    "display_name": "Anima 角色 Tag 选择器+",
+    "description": "角色 Tag 选择器增强版，支持将角色标签与下方的自定义提示词文本，通过指定的分隔符自动拼接输出。",
+    "inputs": {
+      "character_tags": {
+        "name": "角色 Tag",
+        "tooltip": "选中的角色列表，以逗号隔开。"
+      },
+      "extra_text": {
+        "name": "自定义文本",
+        "tooltip": "在角色输入框下面的自定义提示词或文本内容。"
+      },
+      "separator": {
+        "name": "分隔符",
+        "tooltip": "自动拼接两段文本时的分隔符，默认为 ', '。"
+      }
+    },
+    "outputs": {
+      "0": { "name": "文本" }
+    }
+  }
+}
