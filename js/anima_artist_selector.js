@@ -14,12 +14,12 @@ app.registerExtension({
                 const artistTagsWidget = this.widgets.find(w => w.name === "artist_tags");
                 
                 // 添加打开选择器的按钮
-                const btnWidget = this.addWidget("button", t("Open Artist Selector"), null, () => {
+                const btnWidget = this.addWidget("button", t("Open Artist Selector"), null, async () => {
                     if (!window.galleryData) {
                         alert(t("Anima artist database is loading, please wait a few seconds..."));
                         return;
                     }
-                    openArtistSelectorModal(this, artistTagsWidget);
+                    await openArtistSelectorModal(this, artistTagsWidget);
                 });
 
                 // 给按钮增加精致边框与微动画 (经典蓝科技感美学)
@@ -45,7 +45,7 @@ app.registerExtension({
     }
 });
 
-function openArtistSelectorModal(node, tagsWidget) {
+async function openArtistSelectorModal(node, tagsWidget) {
     // 1. 解析当前节点中已经选中的 tags，兼容 @ 前缀和 by 前缀
     const currentTagsText = tagsWidget.value || "";
     const selectedArtists = new Set(
@@ -62,6 +62,39 @@ function openArtistSelectorModal(node, tagsWidget) {
             .filter(t => t.length > 0)
     );
 
+    // 加载后端持久化配置
+    let favoritesConfig = {
+        artist: {
+            groups: [{ id: "default", name: t("My Favorites"), isSystem: true }],
+            items: []
+        }
+    };
+    try {
+        const response = await fetch("/anima-tools/favorites");
+        if (response.ok) {
+            favoritesConfig = await response.json();
+        }
+    } catch (e) {
+        console.error("Failed to load favorites", e);
+    }
+    
+    let groups = favoritesConfig.artist.groups || [{ id: "default", name: t("My Favorites"), isSystem: true }];
+    let favoriteItems = favoritesConfig.artist.items || [];
+    let favoriteMap = new Map();
+    favoriteItems.forEach(fi => {
+        if (!fi.isCustom) {
+            favoriteMap.set(fi.name, fi);
+        }
+    });
+    let favoriteSet = new Set(favoriteItems.filter(fi => !fi.isCustom).map(fi => fi.name));
+
+    // 匹配已经勾选的自定义项
+    favoriteItems.forEach(fi => {
+        if (fi.isCustom && fi.customContent && currentTagsText.includes(fi.customContent.trim())) {
+            selectedArtists.add(fi.name);
+        }
+    });
+
     // CDN 镜像源配置 (保存在本地，下次自动读取)
     const CDN_STORAGE_KEY = "anima-selector-active-cdn";
     let activeCdn = localStorage.getItem(CDN_STORAGE_KEY) || "jsdelivr";
@@ -70,13 +103,397 @@ function openArtistSelectorModal(node, tagsWidget) {
     const SORT_STORAGE_KEY = "anima-selector-active-sort";
     const PAGE_STORAGE_KEY = "anima-selector-active-page";
     const SCROLL_STORAGE_KEY = "anima-selector-active-scroll";
-    
-    // 收藏持久化
-    const FAVORITES_STORAGE_KEY = "anima-artist-favorites-list";
-    let favoriteSet = new Set(JSON.parse(localStorage.getItem(FAVORITES_STORAGE_KEY)) || []);
 
-    function saveFavorites() {
-        localStorage.setItem(FAVORITES_STORAGE_KEY, JSON.stringify(Array.from(favoriteSet)));
+    async function saveFavorites() {
+        const nextItems = [];
+        // 保持自定义项
+        favoriteItems.forEach(fi => {
+            if (fi.isCustom) {
+                nextItems.push(fi);
+            }
+        });
+        // 保持系统项
+        favoriteMap.forEach((val, key) => {
+            if (favoriteSet.has(key)) {
+                nextItems.push(val);
+            }
+        });
+        
+        favoriteItems = nextItems;
+        favoritesConfig.artist.groups = groups;
+        favoritesConfig.artist.items = favoriteItems;
+        
+        try {
+            await fetch("/anima-tools/favorites", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(favoritesConfig)
+            });
+        } catch (e) {
+            console.error("Failed to save favorites", e);
+        }
+    }
+
+    function openMemoEditModal(item, callback) {
+        const dialog = document.createElement("div");
+        dialog.style.cssText = `
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            background: rgba(0, 0, 0, 0.6);
+            backdrop-filter: blur(10px);
+            z-index: 100000;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        `;
+        
+        const content = document.createElement("div");
+        content.style.cssText = `
+            background: #1c1c1e;
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 16px;
+            padding: 24px;
+            width: 90%;
+            max-width: 400px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.5);
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+            animation: animaFadeIn 0.2s ease-out;
+        `;
+        
+        const title = document.createElement("div");
+        title.innerText = t("Edit Nickname / Note");
+        title.style.cssText = "font-size: 16px; font-weight: 700; color: #ffffff;";
+        
+        const input = document.createElement("input");
+        input.type = "text";
+        const favInfo = item.isCustom ? item : favoriteMap.get(item.name);
+        input.value = favInfo ? favInfo.nickname || "" : "";
+        input.placeholder = t("Enter a nickname or descriptive note...");
+        input.style.cssText = `
+            background: #2c2c2e;
+            border: 1px solid rgba(255,255,255,0.15);
+            border-radius: 8px;
+            padding: 10px 12px;
+            color: #ffffff;
+            font-size: 14px;
+            outline: none;
+            transition: border-color 0.2s;
+        `;
+        input.onfocus = () => input.style.borderColor = "#0b8ce9";
+        input.onblur = () => input.style.borderColor = "rgba(255,255,255,0.15)";
+        
+        const btnRow = document.createElement("div");
+        btnRow.style.cssText = "display: flex; justify-content: flex-end; gap: 12px; margin-top: 8px;";
+        
+        const cancel = document.createElement("button");
+        cancel.innerText = t("Cancel");
+        cancel.style.cssText = "background: transparent; border: none; color: #9ca3af; padding: 8px 16px; cursor: pointer; font-size: 14px;";
+        cancel.onclick = () => dialog.remove();
+        
+        const confirm = document.createElement("button");
+        confirm.innerText = t("Save");
+        confirm.style.cssText = "background: #0b8ce9; border: none; color: #ffffff; padding: 8px 20px; border-radius: 8px; cursor: pointer; font-size: 14px; font-weight: 600;";
+        confirm.onclick = () => {
+            callback(input.value.trim());
+            dialog.remove();
+        };
+        
+        input.onkeydown = (e) => {
+            if (e.key === "Enter") confirm.click();
+            else if (e.key === "Escape") cancel.click();
+        };
+        
+        btnRow.appendChild(cancel);
+        btnRow.appendChild(confirm);
+        content.appendChild(title);
+        content.appendChild(input);
+        content.appendChild(btnRow);
+        dialog.appendChild(content);
+        
+        document.body.appendChild(dialog);
+        input.focus();
+    }
+
+    function openGroupSelectPopover(x, y, item, onUpdate) {
+        const existing = document.getElementById("anima-group-popover");
+        if (existing) existing.remove();
+        
+        const popover = document.createElement("div");
+        popover.id = "anima-group-popover";
+        popover.style.cssText = `
+            position: fixed !important;
+            top: ${y}px !important;
+            left: ${x}px !important;
+            background: #1c1c1e !important;
+            border: 1px solid rgba(255,255,255,0.15) !important;
+            border-radius: 12px !important;
+            padding: 12px !important;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5) !important;
+            z-index: 1000000 !important;
+            display: flex !important;
+            flex-direction: column !important;
+            gap: 8px !important;
+            min-width: 160px !important;
+            max-height: 250px !important;
+            overflow-y: auto !important;
+            transform: translate(-50%, 10px) !important;
+            transition: none !important;
+            animation: animaPopoverFadeIn 0.15s ease-out forwards !important;
+        `;
+        
+        const favInfo = favoriteMap.get(item.name);
+        const activeGroupIds = favInfo ? favInfo.groupIds || [] : [];
+        
+        groups.forEach(g => {
+            const label = document.createElement("label");
+            label.style.cssText = "display: flex; align-items: center; gap: 8px; color: #e2e8f0; font-size: 13px; cursor: pointer; padding: 4px 6px; border-radius: 6px; transition: background 0.2s;";
+            label.onmouseover = () => label.style.background = "rgba(255,255,255,0.06)";
+            label.onmouseout = () => label.style.background = "transparent";
+            
+            const checkbox = document.createElement("input");
+            checkbox.type = "checkbox";
+            checkbox.checked = activeGroupIds.includes(g.id);
+            checkbox.style.cssText = "cursor: pointer;";
+            
+            checkbox.onchange = () => {
+                let fav = favoriteMap.get(item.name);
+                if (!fav) {
+                    fav = { name: item.name, nickname: "", groupIds: [], isCustom: false };
+                    favoriteMap.set(item.name, fav);
+                }
+                
+                if (checkbox.checked) {
+                    if (!fav.groupIds.includes(g.id)) {
+                        fav.groupIds.push(g.id);
+                    }
+                } else {
+                    fav.groupIds = fav.groupIds.filter(id => id !== g.id);
+                }
+                
+                if (fav.groupIds.length === 0) {
+                    favoriteSet.delete(item.name);
+                } else {
+                    favoriteSet.add(item.name);
+                }
+                
+                onUpdate();
+            };
+            
+            label.appendChild(checkbox);
+            
+            const nameSpan = document.createElement("span");
+            nameSpan.innerText = g.name;
+            label.appendChild(nameSpan);
+            
+            popover.appendChild(label);
+        });
+        
+        const closePopoverHandler = (e) => {
+            if (!popover.contains(e.target)) {
+                popover.remove();
+                document.removeEventListener("mousedown", closePopoverHandler);
+            }
+        };
+        
+        setTimeout(() => {
+            document.addEventListener("mousedown", closePopoverHandler);
+        }, 50);
+        
+        document.body.appendChild(popover);
+    }
+
+    function openGroupCreateModal(callback) {
+        openTextInputModal(t("Create New Group"), t("Enter group name..."), "", callback);
+    }
+    
+    function openGroupRenameModal(currentName, callback) {
+        openTextInputModal(t("Rename Group"), t("Enter new group name..."), currentName, callback);
+    }
+    
+    function openTextInputModal(titleText, placeholderText, defaultValue, callback) {
+        const dialog = document.createElement("div");
+        dialog.style.cssText = `
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            background: rgba(0, 0, 0, 0.6);
+            backdrop-filter: blur(10px);
+            z-index: 100000;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        `;
+        
+        const content = document.createElement("div");
+        content.style.cssText = `
+            background: #1c1c1e;
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 16px;
+            padding: 24px;
+            width: 90%;
+            max-width: 400px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.5);
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+            animation: animaFadeIn 0.2s ease-out;
+        `;
+        
+        const title = document.createElement("div");
+        title.innerText = titleText;
+        title.style.cssText = "font-size: 16px; font-weight: 700; color: #ffffff;";
+        
+        const input = document.createElement("input");
+        input.type = "text";
+        input.value = defaultValue;
+        input.placeholder = placeholderText;
+        input.style.cssText = `
+            background: #2c2c2e;
+            border: 1px solid rgba(255,255,255,0.15);
+            border-radius: 8px;
+            padding: 10px 12px;
+            color: #ffffff;
+            font-size: 14px;
+            outline: none;
+        `;
+        
+        const btnRow = document.createElement("div");
+        btnRow.style.cssText = "display: flex; justify-content: flex-end; gap: 12px; margin-top: 8px;";
+        
+        const cancel = document.createElement("button");
+        cancel.innerText = t("Cancel");
+        cancel.style.cssText = "background: transparent; border: none; color: #9ca3af; padding: 8px 16px; cursor: pointer; font-size: 14px;";
+        cancel.onclick = () => dialog.remove();
+        
+        const confirm = document.createElement("button");
+        confirm.innerText = t("OK");
+        confirm.style.cssText = "background: #0b8ce9; border: none; color: #ffffff; padding: 8px 20px; border-radius: 8px; cursor: pointer; font-size: 14px; font-weight: 600;";
+        confirm.onclick = () => {
+            const val = input.value.trim();
+            if (val) {
+                callback(val);
+                dialog.remove();
+            }
+        };
+        
+        input.onkeydown = (e) => {
+            if (e.key === "Enter") confirm.click();
+            else if (e.key === "Escape") cancel.click();
+        };
+        
+        btnRow.appendChild(cancel);
+        btnRow.appendChild(confirm);
+        content.appendChild(title);
+        content.appendChild(input);
+        content.appendChild(btnRow);
+        dialog.appendChild(content);
+        
+        document.body.appendChild(dialog);
+        input.focus();
+    }
+
+    function openCustomItemCreateModal(callback) {
+        const dialog = document.createElement("div");
+        dialog.style.cssText = `
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            background: rgba(0, 0, 0, 0.6);
+            backdrop-filter: blur(10px);
+            z-index: 100000;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        `;
+        
+        const content = document.createElement("div");
+        content.style.cssText = `
+            background: #1c1c1e;
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 16px;
+            padding: 24px;
+            width: 90%;
+            max-width: 450px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.5);
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+            animation: animaFadeIn 0.2s ease-out;
+        `;
+        
+        const title = document.createElement("div");
+        title.innerText = t("Create Custom Item");
+        title.style.cssText = "font-size: 16px; font-weight: 700; color: #ffffff;";
+        
+        const titleInput = document.createElement("input");
+        titleInput.type = "text";
+        titleInput.placeholder = t("Item Title (e.g. My Style A)...");
+        titleInput.style.cssText = `
+            background: #2c2c2e;
+            border: 1px solid rgba(255,255,255,0.15);
+            border-radius: 8px;
+            padding: 10px 12px;
+            color: #ffffff;
+            font-size: 14px;
+            outline: none;
+        `;
+        
+        const contentInput = document.createElement("textarea");
+        contentInput.placeholder = t("Enter prompt tags (e.g. masterpiece, highly detailed)...");
+        contentInput.rows = 4;
+        contentInput.style.cssText = `
+            background: #2c2c2e;
+            border: 1px solid rgba(255,255,255,0.15);
+            border-radius: 8px;
+            padding: 10px 12px;
+            color: #ffffff;
+            font-size: 14px;
+            outline: none;
+            resize: vertical;
+            font-family: monospace;
+        `;
+        
+        const btnRow = document.createElement("div");
+        btnRow.style.cssText = "display: flex; justify-content: flex-end; gap: 12px; margin-top: 8px;";
+        
+        const cancel = document.createElement("button");
+        cancel.innerText = t("Cancel");
+        cancel.style.cssText = "background: transparent; border: none; color: #9ca3af; padding: 8px 16px; cursor: pointer; font-size: 14px;";
+        cancel.onclick = () => dialog.remove();
+        
+        const confirm = document.createElement("button");
+        confirm.innerText = t("Create");
+        confirm.style.cssText = "background: #0b8ce9; border: none; color: #ffffff; padding: 8px 20px; border-radius: 8px; cursor: pointer; font-size: 14px; font-weight: 600;";
+        confirm.onclick = () => {
+            const titleVal = titleInput.value.trim();
+            const contentVal = contentInput.value.trim();
+            if (titleVal && contentVal) {
+                callback(titleVal, contentVal);
+                dialog.remove();
+            } else {
+                alert(t("Title and Content cannot be empty!"));
+            }
+        };
+        
+        btnRow.appendChild(cancel);
+        btnRow.appendChild(confirm);
+        content.appendChild(title);
+        content.appendChild(titleInput);
+        content.appendChild(contentInput);
+        content.appendChild(btnRow);
+        dialog.appendChild(content);
+        
+        document.body.appendChild(dialog);
+        titleInput.focus();
     }
 
     const SIDEBAR_STORAGE_KEY = "anima-artist-active-sidebar-category";
@@ -84,6 +501,12 @@ function openArtistSelectorModal(node, tagsWidget) {
 
     let activeSort = localStorage.getItem(SORT_STORAGE_KEY) || "works-desc";
     let activeCategory = localStorage.getItem(SIDEBAR_STORAGE_KEY) || "all";
+    
+    // 如果之前 activeCategory 是 favorites，转换为 default 分组
+    if (activeCategory === "favorites") {
+        activeCategory = "default";
+    }
+    
     let lastScrollTop = parseInt(localStorage.getItem(SCROLL_STORAGE_KEY)) || 0;
     let lastSidebarScrollTop = parseInt(localStorage.getItem(SIDEBAR_SCROLL_STORAGE_KEY)) || 0;
     let isFirstRender = true;
@@ -147,6 +570,10 @@ function openArtistSelectorModal(node, tagsWidget) {
         @keyframes animaFadeIn {
             from { opacity: 0; transform: scale(0.95) translateY(10px); }
             to { opacity: 1; transform: scale(1) translateY(0); }
+        }
+        @keyframes animaPopoverFadeIn {
+            from { opacity: 0; transform: translate(-50%, 0) scale(0.95); }
+            to { opacity: 1; transform: translate(-50%, 10px) scale(1); }
         }
         @keyframes animaShimmer {
             0% { background-position: -200% 0; }
@@ -483,6 +910,7 @@ function openArtistSelectorModal(node, tagsWidget) {
         <option value="unique-asc">${t("Uniqueness Score ⬆")}</option>
         <option value="name-asc">${t("Name A-Z")}</option>
         <option value="name-desc">${t("Name Z-A")}</option>
+        <option value="random">${t("Random")}</option>
     `;
     sortSelect.value = activeSort; 
     sortSelect.onchange = () => {
@@ -520,6 +948,8 @@ function openArtistSelectorModal(node, tagsWidget) {
         renderCurrentPage(); 
     };
     filterControls.appendChild(cdnSelect);
+
+
 
     // 右侧：功能按钮
     const actionControls = document.createElement("div");
@@ -589,11 +1019,9 @@ function openArtistSelectorModal(node, tagsWidget) {
     `;
     clearAllBtn.onclick = () => {
         if (selectedArtists.size === 0) return;
-        if (confirm(t("Are you sure you want to clear all selected artists?"))) {
-            selectedArtists.clear();
-            updateCountLabel();
-            renderCurrentPage();
-        }
+        selectedArtists.clear();
+        updateCountLabel();
+        renderCurrentPage();
     };
     actionControls.appendChild(clearAllBtn);
 
@@ -757,7 +1185,16 @@ function openArtistSelectorModal(node, tagsWidget) {
     `;
 
     const countLabel = document.createElement("div");
-    countLabel.style.cssText = "font-size: 14.5px; color: #7dd3fc; font-weight: 700; display: flex; align-items: center; gap: 6px;";
+    countLabel.style.cssText = "font-size: 14.5px; color: #7dd3fc; font-weight: 700; display: flex; align-items: center; gap: 6px; cursor: pointer; user-select: none; transition: opacity 0.2s ease;";
+    countLabel.onmouseenter = () => {
+        countLabel.style.opacity = "0.75";
+    };
+    countLabel.onmouseleave = () => {
+        countLabel.style.opacity = "1";
+    };
+    countLabel.onclick = () => {
+        showSelectedOnlyBtn.click();
+    };
     
     function updateCountLabel() {
         countLabel.innerHTML = `
@@ -786,7 +1223,23 @@ function openArtistSelectorModal(node, tagsWidget) {
 
     // 确认应用并关闭弹窗
     function applySelectionAndClose() {
-        let resultString = Array.from(selectedArtists).map(name => `@${name}`).join(", ");
+        let resultTags = [];
+        selectedArtists.forEach(selName => {
+            const custItem = favoriteItems.find(fi => fi.isCustom && fi.name === selName);
+            if (custItem) {
+                const subTags = custItem.customContent.split(",");
+                subTags.forEach(st => {
+                    const stClean = st.strip ? st.strip() : st.trim();
+                    if (stClean) {
+                        resultTags.push(`_raw_:${stClean}`);
+                    }
+                });
+            } else {
+                resultTags.push(`@${selName}`);
+            }
+        });
+        
+        let resultString = resultTags.join(", ");
         if (resultString) {
             resultString += ", ";
         }
@@ -822,10 +1275,11 @@ function openArtistSelectorModal(node, tagsWidget) {
     let totalPages = 1;    
 
     // 渲染侧边栏菜单
+    // 渲染侧边栏菜单
     function renderSidebar() {
         sidebarList.innerHTML = "";
 
-        // 全部画师
+        // 1. 全部画师
         const allItem = document.createElement("div");
         allItem.className = `sidebar-item ${activeCategory === "all" ? "active" : ""}`;
         allItem.innerHTML = `
@@ -838,24 +1292,133 @@ function openArtistSelectorModal(node, tagsWidget) {
         allItem.onclick = () => switchCategory("all");
         sidebarList.appendChild(allItem);
 
-        // 我的收藏
-        const favItem = document.createElement("div");
-        favItem.className = `sidebar-item ${activeCategory === "favorites" ? "active" : ""}`;
-        favItem.innerHTML = `
-            <div style="display:flex;align-items:center;gap:10px;color:#0b8ce9;">
-                <span style="font-size:15px;">❤️</span>
-                <span>${t("My Favorites")}</span>
-            </div>
-            <span style="font-size:11px;opacity:0.8;background:rgba(11,140,233,0.15);color:#7dd3fc;padding:2px 6px;border-radius:20px;font-weight:700;">${favoriteSet.size}</span>
+        // 2. 我的收藏标题
+        const collectionsHeader = document.createElement("div");
+        collectionsHeader.style.cssText = "font-size: 11px; font-weight: 700; color: #6b7280; padding: 16px 10px 8px 10px; text-transform: uppercase; letter-spacing: 0.05em; display: flex; align-items: center; justify-content: space-between;";
+        collectionsHeader.innerHTML = `
+            <span>${t("My Collections")}</span>
+            <span id="add-group-btn" style="cursor:pointer; font-size:16px; font-weight:bold; color:#0b8ce9; opacity:0.8; border-radius: 4px; background: rgba(11, 140, 233, 0.1); display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; line-height: 1 !important; padding: 0 !important; box-sizing: border-box !important; transition: all 0.2s ease;" title="${t("Create Group")}">+</span>
         `;
-        favItem.onclick = () => switchCategory("favorites");
-        sidebarList.appendChild(favItem);
+        sidebarList.appendChild(collectionsHeader);
+
+        const addGroupBtn = collectionsHeader.querySelector("#add-group-btn");
+        if (addGroupBtn) {
+            addGroupBtn.onmouseenter = () => {
+                addGroupBtn.style.opacity = "1";
+                addGroupBtn.style.background = "rgba(11, 140, 233, 0.2)";
+                addGroupBtn.style.transform = "scale(1.1)";
+            };
+            addGroupBtn.onmouseleave = () => {
+                addGroupBtn.style.opacity = "0.8";
+                addGroupBtn.style.background = "rgba(11, 140, 233, 0.1)";
+                addGroupBtn.style.transform = "scale(1)";
+            };
+            addGroupBtn.onclick = (e) => {
+                e.stopPropagation();
+                openGroupCreateModal((groupName) => {
+                    const newId = "group_" + Date.now();
+                    groups.push({ id: newId, name: groupName, isSystem: false });
+                    saveFavorites();
+                    renderSidebar();
+                });
+            };
+        }
+
+        // 3. 循环渲染分组列表
+        groups.forEach(g => {
+            const count = favoriteItems.filter(fi => fi.groupIds && fi.groupIds.includes(g.id)).length;
+            const item = document.createElement("div");
+            item.className = `sidebar-item ${activeCategory === g.id ? "active" : ""}`;
+            item.style.cssText = "position: relative;";
+            
+            const isDefault = g.id === "default";
+            
+            item.innerHTML = `
+                <div style="display:flex;align-items:center;gap:10px; max-width: 60%; overflow:hidden;">
+                    <span style="font-size:14px;">${isDefault ? '❤️' : '📁'}</span>
+                    <span class="group-name-text" style="white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${g.name}</span>
+                </div>
+                <div style="display:flex; align-items:center; gap: 8px;">
+                    <span style="font-size:11px;opacity:0.8;background:${isDefault ? 'rgba(11,140,233,0.15)' : 'rgba(255,255,255,0.06)'};color:${isDefault ? '#7dd3fc' : '#9ca3af'};padding:2px 6px;border-radius:20px;font-weight:700;">${count}</span>
+                    ${!isDefault ? `
+                        <div class="group-actions" style="display:flex; gap:6px; align-items:center; overflow:hidden; max-width:0; opacity:0; transform:translateX(10px); transition:all 0.25s cubic-bezier(0.4, 0, 0.2, 1);">
+                            <span class="group-edit-btn" style="cursor:pointer; opacity:0.6; color:#e2e8f0; transition:opacity 0.2s; display:flex; align-items:center;" title="Rename">
+                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                                    <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+                                    <path d="M18.5 2.5a2.121 2.121 0 1 1 3 3L12 15l-4 1 1-4Z"></path>
+                                </svg>
+                            </span>
+                            <span class="group-del-btn" style="cursor:pointer; opacity:0.6; color:#ef4444; transition:opacity 0.2s; display:flex; align-items:center;" title="Delete">
+                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                                    <polyline points="3 6 5 6 21 6"></polyline>
+                                    <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                                </svg>
+                            </span>
+                        </div>
+                    ` : ''}
+                </div>
+            `;
+            
+            item.onclick = () => switchCategory(g.id);
+            
+            if (!isDefault) {
+                const actionsContainer = item.querySelector(".group-actions");
+                const editBtn = item.querySelector(".group-edit-btn");
+                const delBtn = item.querySelector(".group-del-btn");
+                
+                item.onmouseenter = () => {
+                    actionsContainer.style.maxWidth = "50px";
+                    actionsContainer.style.opacity = "1";
+                    actionsContainer.style.transform = "translateX(0)";
+                };
+                item.onmouseleave = () => {
+                    actionsContainer.style.maxWidth = "0";
+                    actionsContainer.style.opacity = "0";
+                    actionsContainer.style.transform = "translateX(10px)";
+                };
+                
+                editBtn.onmouseenter = () => editBtn.style.opacity = "1";
+                editBtn.onmouseleave = () => editBtn.style.opacity = "0.6";
+                editBtn.onclick = (e) => {
+                    e.stopPropagation();
+                    openGroupRenameModal(g.name, (newName) => {
+                        g.name = newName;
+                        saveFavorites();
+                        renderSidebar();
+                    });
+                };
+                
+                delBtn.onmouseenter = () => delBtn.style.opacity = "1";
+                delBtn.onmouseleave = () => delBtn.style.opacity = "0.5";
+                delBtn.onclick = (e) => {
+                    e.stopPropagation();
+                    if (confirm(t("Are you sure you want to delete this group? Items inside won't be deleted."))) {
+                        groups = groups.filter(gr => gr.id !== g.id);
+                        favoriteItems.forEach(fi => {
+                            if (fi.groupIds) {
+                                fi.groupIds = fi.groupIds.filter(id => id !== g.id);
+                            }
+                        });
+                        if (activeCategory === g.id) {
+                            activeCategory = "all";
+                        }
+                        saveFavorites();
+                        renderSidebar();
+                        triggerFilter();
+                    }
+                };
+            }
+            
+            sidebarList.appendChild(item);
+        });
     }
 
     // 切换分类侧边栏
     function switchCategory(category) {
         activeCategory = category;
         localStorage.setItem(SIDEBAR_STORAGE_KEY, category);
+        
+        const isCustomGroup = category !== "all" && category !== "default";
         
         currentPage = 1;
         localStorage.setItem(PAGE_STORAGE_KEY, 1);
@@ -874,31 +1437,82 @@ function openArtistSelectorModal(node, tagsWidget) {
 
         // A. 基础分类过滤
         let items = window.galleryData || [];
-        if (activeCategory === "favorites") {
-            items = items.filter(item => favoriteSet.has(item.name));
+        const isGroup = activeCategory === "default" || activeCategory.startsWith("group_");
+        
+        if (isGroup) {
+            const groupItemNames = new Set(
+                favoriteItems.filter(fi => !fi.isCustom && fi.groupIds && fi.groupIds.includes(activeCategory)).map(fi => fi.name)
+            );
+            items = items.filter(item => groupItemNames.has(item.name));
+            
+            const customItems = favoriteItems.filter(fi => fi.isCustom && fi.groupIds && fi.groupIds.includes(activeCategory));
+            items = [...customItems, ...items];
         }
 
         // B. 搜索关键词过滤
         if (query) {
-            items = items.filter(item => item.name && item.name.toLowerCase().includes(query));
+            items = items.filter(item => {
+                const name = item.isCustom ? (item.nickname || item.name) : item.name;
+                return name && name.toLowerCase().includes(query);
+            });
         }
         if (showSelectedOnly) {
             items = items.filter(item => selectedArtists.has(item.name));
         }
 
-        // C. 排序数据
+        // C. 排序数据 (自定义项目置顶)
         if (sortVal === "works-desc") {
-            items.sort((a, b) => b.post_count - a.post_count);
+            items.sort((a, b) => {
+                if (a.isCustom && b.isCustom) return 0;
+                if (a.isCustom) return -1;
+                if (b.isCustom) return 1;
+                return b.post_count - a.post_count;
+            });
         } else if (sortVal === "works-asc") {
-            items.sort((a, b) => a.post_count - b.post_count);
+            items.sort((a, b) => {
+                if (a.isCustom && b.isCustom) return 0;
+                if (a.isCustom) return -1;
+                if (b.isCustom) return 1;
+                return a.post_count - b.post_count;
+            });
         } else if (sortVal === "unique-desc") {
-            items.sort((a, b) => b.uniqueness_score - a.uniqueness_score);
+            items.sort((a, b) => {
+                if (a.isCustom && b.isCustom) return 0;
+                if (a.isCustom) return -1;
+                if (b.isCustom) return 1;
+                return b.uniqueness_score - a.uniqueness_score;
+            });
         } else if (sortVal === "unique-asc") {
-            items.sort((a, b) => a.uniqueness_score - b.uniqueness_score);
+            items.sort((a, b) => {
+                if (a.isCustom && b.isCustom) return 0;
+                if (a.isCustom) return -1;
+                if (b.isCustom) return 1;
+                return a.uniqueness_score - b.uniqueness_score;
+            });
         } else if (sortVal === "name-asc") {
-            items.sort((a, b) => a.name.localeCompare(b.name));
+            items.sort((a, b) => {
+                const nameA = a.isCustom ? (a.nickname || a.name) : a.name;
+                const nameB = b.isCustom ? (b.nickname || b.name) : b.name;
+                if (a.isCustom && !b.isCustom) return -1;
+                if (!a.isCustom && b.isCustom) return 1;
+                return nameA.localeCompare(nameB);
+            });
         } else if (sortVal === "name-desc") {
-            items.sort((a, b) => b.name.localeCompare(a.name));
+            items.sort((a, b) => {
+                const nameA = a.isCustom ? (a.nickname || a.name) : a.name;
+                const nameB = b.isCustom ? (b.nickname || b.name) : b.name;
+                if (a.isCustom && !b.isCustom) return -1;
+                if (!a.isCustom && b.isCustom) return 1;
+                return nameB.localeCompare(nameA);
+            });
+        } else if (sortVal === "random") {
+            const customItems = items.filter(item => item.isCustom);
+            const normalItems = items.filter(item => !item.isCustom);
+            for (let i = normalItems.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [normalItems[i], normalItems[j]] = [normalItems[j], normalItems[i]];
+            }
+            items = [...customItems, ...normalItems];
         }
 
         filteredData = items;
@@ -995,7 +1609,9 @@ function openArtistSelectorModal(node, tagsWidget) {
     function renderCurrentPage() {
         listContainer.innerHTML = "";
         
-        if (filteredData.length === 0) {
+        const isCustomGroup = activeCategory !== "all" && activeCategory !== "default";
+        
+        if (filteredData.length === 0 && !isCustomGroup) {
             const noResult = document.createElement("div");
             noResult.style.cssText = "grid-column: 1 / -1; padding: 60px; text-align: center; color: #9ca3af; font-size: 16px; font-weight: 500;";
             noResult.innerText = t("No matching artist styles found");
@@ -1006,9 +1622,89 @@ function openArtistSelectorModal(node, tagsWidget) {
         const currentPageData = filteredData.slice((currentPage - 1) * pageSize, currentPage * pageSize);
         const fragment = document.createDocumentFragment();
         
+        // 如果是自定义分组，且当前在第一页，在最前面添加“新建自定义项”虚线卡片
+        if (isCustomGroup && currentPage === 1) {
+            const createCard = document.createElement("div");
+            createCard.style.cssText = `
+                background: rgba(22, 22, 32, 0.4) !important;
+                border: 2px dashed rgba(11, 140, 233, 0.4) !important;
+                border-radius: 20px !important;
+                overflow: hidden !important;
+                display: flex !important;
+                flex-direction: column !important;
+                align-items: center !important;
+                justify-content: center !important;
+                width: 100% !important;
+                height: 0 !important;
+                padding-bottom: 133.33% !important; 
+                cursor: pointer !important;
+                transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1) !important; 
+                position: relative !important;
+                user-select: none !important;
+                box-sizing: border-box !important;
+            `;
+            
+            const contentWrap = document.createElement("div");
+            contentWrap.style.cssText = `
+                position: absolute;
+                top: 0;
+                left: 0;
+                width: 100%;
+                height: 100%;
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                justify-content: center;
+                gap: 12px;
+                box-sizing: border-box;
+                padding: 16px;
+                color: #7dd3fc;
+                transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1), color 0.25s ease !important;
+            `;
+            
+            contentWrap.innerHTML = `
+                <div style="font-size: 44px; line-height: 1; font-weight: 300;">+</div>
+                <div style="font-size: 13.5px; font-weight: 700; text-align: center;">${t("Create Custom Item")}</div>
+            `;
+            createCard.appendChild(contentWrap);
+            
+            createCard.onmouseenter = () => {
+                createCard.style.setProperty("background", "rgba(11, 140, 233, 0.05)", "important");
+                createCard.style.setProperty("border-color", "rgba(11, 140, 233, 0.8)", "important");
+                contentWrap.style.color = "#ffffff";
+                contentWrap.style.transform = "scale(1.08)";
+            };
+            createCard.onmouseleave = () => {
+                createCard.style.setProperty("background", "rgba(22, 22, 32, 0.4)", "important");
+                createCard.style.setProperty("border-color", "rgba(11, 140, 233, 0.4)", "important");
+                contentWrap.style.color = "#7dd3fc";
+                contentWrap.style.transform = "scale(1)";
+            };
+            
+            createCard.onclick = (e) => {
+                e.stopPropagation();
+                openCustomItemCreateModal((title, content) => {
+                    const newItem = {
+                        id: "custom_" + Date.now(),
+                        name: title,
+                        nickname: title,
+                        groupIds: [activeCategory],
+                        isCustom: true,
+                        customContent: content
+                    };
+                    favoriteItems.push(newItem);
+                    saveFavorites();
+                    triggerFilter();
+                    renderSidebar();
+                });
+            };
+            
+            fragment.appendChild(createCard);
+        }
+        
         currentPageData.forEach(item => {
             const isSelected = selectedArtists.has(item.name);
-            const isFavorite = favoriteSet.has(item.name);
+            const isFavorite = item.isCustom ? true : favoriteSet.has(item.name);
             
             const card = document.createElement("div");
             card.dataset.name = item.name;
@@ -1055,7 +1751,7 @@ function openArtistSelectorModal(node, tagsWidget) {
             ` : '';
             card.appendChild(checkbox);
 
-            // ❤️ 收藏爱心图标 (放在右上角)
+            // ❤️ 收藏爱心图标 / 🗑️ 删除自定义项 (放在右上角)
             const favIcon = document.createElement("div");
             favIcon.style.cssText = `
                 position: absolute !important;
@@ -1074,125 +1770,298 @@ function openArtistSelectorModal(node, tagsWidget) {
                 -webkit-backdrop-filter: blur(5px) !important;
                 border: 1px solid rgba(255,255,255,0.1) !important;
             `;
-            favIcon.innerHTML = `
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="${isFavorite ? '#0b8ce9' : 'none'}" stroke="${isFavorite ? '#0b8ce9' : '#d1d5db'}" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="transition: transform 0.2s ease;">
-                    <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"></path>
-                </svg>
-            `;
-            favIcon.onmouseover = (e) => {
-                e.stopPropagation();
-                favIcon.style.transform = "scale(1.15)";
-                favIcon.style.background = "rgba(10, 10, 15, 0.7)";
-                const svg = favIcon.querySelector('svg');
-                if (!isFavorite) svg.setAttribute('stroke', '#0b8ce9');
-            };
-            favIcon.onmouseout = (e) => {
-                e.stopPropagation();
-                favIcon.style.transform = "scale(1)";
-                favIcon.style.background = "rgba(10, 10, 15, 0.4)";
-                const svg = favIcon.querySelector('svg');
-                if (!isFavorite) svg.setAttribute('stroke', '#d1d5db');
-            };
-            favIcon.onclick = (e) => {
-                e.stopPropagation();
-                if (favoriteSet.has(item.name)) {
-                    favoriteSet.delete(item.name);
+            
+            if (item.isCustom) {
+                favIcon.innerHTML = `
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                        <polyline points="3 6 5 6 21 6"></polyline>
+                        <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                    </svg>
+                `;
+                favIcon.onmouseover = (e) => {
+                    e.stopPropagation();
+                    favIcon.style.transform = "scale(1.15)";
+                    favIcon.style.background = "rgba(239, 68, 68, 0.2)";
+                };
+                favIcon.onmouseout = (e) => {
+                    e.stopPropagation();
+                    favIcon.style.transform = "scale(1)";
+                    favIcon.style.background = "rgba(10, 10, 15, 0.4)";
+                };
+                favIcon.onclick = (e) => {
+                    e.stopPropagation();
+                    if (confirm(t("Are you sure you want to delete this custom item?"))) {
+                        favoriteItems = favoriteItems.filter(fi => fi.name !== item.name);
+                        selectedArtists.delete(item.name);
+                        saveFavorites();
+                        triggerFilter();
+                        renderSidebar();
+                    }
+                };
+            } else {
+                favIcon.innerHTML = `
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="${isFavorite ? '#0b8ce9' : 'none'}" stroke="${isFavorite ? '#0b8ce9' : '#d1d5db'}" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="transition: transform 0.2s ease;">
+                        <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"></path>
+                    </svg>
+                `;
+                favIcon.onmouseover = (e) => {
+                    e.stopPropagation();
+                    favIcon.style.transform = "scale(1.15)";
+                    favIcon.style.background = "rgba(10, 10, 15, 0.7)";
                     const svg = favIcon.querySelector('svg');
-                    svg.setAttribute('fill', 'none');
-                    svg.setAttribute('stroke', '#d1d5db');
-                } else {
-                    favoriteSet.add(item.name);
+                    if (!isFavorite) svg.setAttribute('stroke', '#0b8ce9');
+                };
+                favIcon.onmouseout = (e) => {
+                    e.stopPropagation();
+                    favIcon.style.transform = "scale(1)";
+                    favIcon.style.background = "rgba(10, 10, 15, 0.4)";
                     const svg = favIcon.querySelector('svg');
-                    svg.setAttribute('fill', '#0b8ce9');
-                    svg.setAttribute('stroke', '#0b8ce9');
-                    favIcon.style.transform = "scale(1.3) rotate(-10deg)";
-                    setTimeout(() => favIcon.style.transform = "scale(1)", 200);
-                }
-                saveFavorites();
-                renderSidebar(); 
-                if (activeCategory === "favorites") {
-                    triggerFilter();
-                }
-            };
+                    if (!isFavorite) svg.setAttribute('stroke', '#d1d5db');
+                };
+                favIcon.onclick = (e) => {
+                    e.stopPropagation();
+                    if (favoriteSet.has(item.name)) {
+                        favoriteSet.delete(item.name);
+                        const svg = favIcon.querySelector('svg');
+                        svg.setAttribute('fill', 'none');
+                        svg.setAttribute('stroke', '#d1d5db');
+                        memoBtn.style.display = "none";
+                        groupBtn.style.display = "none";
+                    } else {
+                        favoriteSet.add(item.name);
+                        const svg = favIcon.querySelector('svg');
+                        svg.setAttribute('fill', '#0b8ce9');
+                        svg.setAttribute('stroke', '#0b8ce9');
+                        favIcon.style.transform = "scale(1.3) rotate(-10deg)";
+                        setTimeout(() => favIcon.style.transform = "scale(1)", 200);
+                        memoBtn.style.display = "flex";
+                        groupBtn.style.display = "flex";
+                        
+                        let fav = favoriteMap.get(item.name);
+                        if (!fav) {
+                            fav = { name: item.name, nickname: "", groupIds: ["default"], isCustom: false };
+                            favoriteMap.set(item.name, fav);
+                        } else if (!fav.groupIds.includes("default")) {
+                            fav.groupIds.push("default");
+                        }
+                    }
+                    saveFavorites();
+                    renderSidebar(); 
+                    if (activeCategory === "favorites" || activeCategory === "default" || activeCategory.startsWith("group_")) {
+                        triggerFilter();
+                    }
+                };
+            }
             card.appendChild(favIcon);
 
-            // Image Element
+            // ✏️ 编辑备注按钮 (放在右上角心形按钮下方)
+            const memoBtn = document.createElement("div");
+            memoBtn.style.cssText = `
+                position: absolute !important;
+                top: 46px !important;
+                right: 10px !important;
+                padding: 6px !important;
+                z-index: 10 !important;
+                display: ${isFavorite ? 'flex' : 'none'} !important;
+                align-items: center !important;
+                justify-content: center !important;
+                transition: all 0.2s ease !important;
+                cursor: pointer !important;
+                border-radius: 50% !important;
+                background: rgba(10, 10, 15, 0.4) !important;
+                backdrop-filter: blur(5px) !important;
+                -webkit-backdrop-filter: blur(5px) !important;
+                border: 1px solid rgba(255,255,255,0.1) !important;
+            `;
+            memoBtn.innerHTML = `
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#e2e8f0" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+                    <path d="M18.5 2.5a2.121 2.121 0 1 1 3 3L12 15l-4 1 1-4Z"></path>
+                </svg>
+            `;
+            memoBtn.onmouseover = (e) => {
+                e.stopPropagation();
+                memoBtn.style.transform = "scale(1.15)";
+                memoBtn.style.background = "rgba(10, 10, 15, 0.7)";
+            };
+            memoBtn.onmouseout = (e) => {
+                e.stopPropagation();
+                memoBtn.style.transform = "scale(1)";
+                memoBtn.style.background = "rgba(10, 10, 15, 0.4)";
+            };
+            memoBtn.onclick = (e) => {
+                e.stopPropagation();
+                openMemoEditModal(item, (newMemo) => {
+                    if (item.isCustom) {
+                        item.nickname = newMemo;
+                    } else {
+                        let fav = favoriteMap.get(item.name);
+                        if (!fav) {
+                            fav = { name: item.name, nickname: newMemo, groupIds: ["default"], isCustom: false };
+                            favoriteMap.set(item.name, fav);
+                            favoriteSet.add(item.name);
+                        } else {
+                            fav.nickname = newMemo;
+                        }
+                    }
+                    saveFavorites();
+                    renderSidebar();
+                    triggerFilter();
+                });
+            };
+            card.appendChild(memoBtn);
+
+            // 📁 管理分组按钮 (放在备注按钮下方)
+            const groupBtn = document.createElement("div");
+            groupBtn.style.cssText = `
+                position: absolute !important;
+                top: 82px !important;
+                right: 10px !important;
+                padding: 6px !important;
+                z-index: 10 !important;
+                display: ${(isFavorite && !item.isCustom) ? 'flex' : 'none'} !important;
+                align-items: center !important;
+                justify-content: center !important;
+                transition: all 0.2s ease !important;
+                cursor: pointer !important;
+                border-radius: 50% !important;
+                background: rgba(10, 10, 15, 0.4) !important;
+                backdrop-filter: blur(5px) !important;
+                -webkit-backdrop-filter: blur(5px) !important;
+                border: 1px solid rgba(255,255,255,0.1) !important;
+            `;
+            groupBtn.innerHTML = `
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#e2e8f0" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+                </svg>
+            `;
+            groupBtn.onmouseover = (e) => {
+                e.stopPropagation();
+                groupBtn.style.transform = "scale(1.15)";
+                groupBtn.style.background = "rgba(10, 10, 15, 0.7)";
+            };
+            groupBtn.onmouseout = (e) => {
+                e.stopPropagation();
+                groupBtn.style.transform = "scale(1)";
+                groupBtn.style.background = "rgba(10, 10, 15, 0.4)";
+            };
+            groupBtn.onclick = (e) => {
+                e.stopPropagation();
+                const rect = groupBtn.getBoundingClientRect();
+                openGroupSelectPopover(rect.left + rect.width / 2, rect.bottom, item, () => {
+                    saveFavorites();
+                    renderSidebar();
+                    if (activeCategory !== "all") {
+                        triggerFilter();
+                    }
+                });
+            };
+            card.appendChild(groupBtn);
+
+            // Image Element or Custom Placeholder
             const placeholder = document.createElement("div");
             placeholder.className = "anima-card-placeholder";
             
-            let firstChar = "A";
-            if (item.name) {
-                const cleanName = item.name.replace(/[^a-zA-Z]/g, "");
-                firstChar = cleanName.length > 0 ? cleanName[0].toUpperCase() : item.name[0].toUpperCase();
-            }
-            
-            let hash = 0;
-            for (let i = 0; i < item.name.length; i++) {
-                hash = item.name.charCodeAt(i) + ((hash << 5) - hash);
-            }
-            const hue = Math.abs(hash % 360);
-            
-            placeholder.style.cssText = `
-                position: absolute !important;
-                top: 0 !important;
-                left: 0 !important;
-                width: 100% !important;
-                height: 100% !important;
-                display: flex !important;
-                flex-direction: column !important;
-                align-items: center !important;
-                justify-content: center !important;
-                font-size: 56px !important;
-                font-weight: 900 !important;
-                color: rgba(255,255,255,0.7) !important;
-                background: linear-gradient(135deg, hsl(${hue}, 45%, 32%), hsl(${(hue + 45) % 360}, 50%, 18%)) !important;
-                z-index: 1 !important;
-                opacity: 0 !important;
-                transition: opacity 0.25s ease !important;
-                text-shadow: 0 4px 12px rgba(0,0,0,0.3) !important;
-            `;
-            placeholder.innerText = firstChar;
-            card.appendChild(placeholder);
+            let img = null;
 
-            const img = document.createElement("img");
-            img.style.cssText = `
-                position: absolute;
-                top: 0;
-                left: 0;
-                width: 100%;
-                height: 100%;
-                object-fit: cover;
-                z-index: 2;
-                opacity: 0;
-                transition: opacity 0.3s cubic-bezier(0.4, 0, 0.2, 1), transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-            `;
-            img.loading = "lazy";
-            
-            const partition = item.p || 1;
-            img.src = getImgUrl(partition, item.id);
-            
-            let loader = null;
-            if (img.complete && img.naturalWidth !== 0) {
-                img.style.opacity = "1";
+            if (item.isCustom) {
+                placeholder.style.cssText = `
+                    position: absolute !important;
+                    top: 0 !important;
+                    left: 0 !important;
+                    width: 100% !important;
+                    height: 100% !important;
+                    display: flex !important;
+                    flex-direction: column !important;
+                    align-items: center !important;
+                    justify-content: center !important;
+                    background: linear-gradient(135deg, #1e293b, #0f172a) !important;
+                    z-index: 1 !important;
+                    opacity: 1 !important;
+                    text-shadow: 0 4px 12px rgba(0,0,0,0.3) !important;
+                    box-sizing: border-box;
+                    padding: 20px;
+                `;
+                placeholder.innerHTML = `
+                    <div style="font-size: 48px; margin-bottom: 8px;">📄</div>
+                    <div style="font-size: 11px; font-weight: 700; color: #38bdf8; background: rgba(56, 189, 248, 0.15); border: 1px solid rgba(56, 189, 248, 0.3); padding: 2px 8px; border-radius: 20px; text-transform: uppercase;">Custom</div>
+                `;
+                card.appendChild(placeholder);
             } else {
-                loader = document.createElement("div");
-                loader.className = "anima-shimmer";
-                const spinner = document.createElement("div");
-                spinner.className = "anima-spinner";
-                loader.appendChild(spinner);
-                card.appendChild(loader);
+                let firstChar = "A";
+                if (item.name) {
+                    const cleanName = item.name.replace(/[^a-zA-Z]/g, "");
+                    firstChar = cleanName.length > 0 ? cleanName[0].toUpperCase() : item.name[0].toUpperCase();
+                }
+                
+                let hash = 0;
+                for (let i = 0; i < item.name.length; i++) {
+                    hash = item.name.charCodeAt(i) + ((hash << 5) - hash);
+                }
+                const hue = Math.abs(hash % 360);
+                
+                placeholder.style.cssText = `
+                    position: absolute !important;
+                    top: 0 !important;
+                    left: 0 !important;
+                    width: 100% !important;
+                    height: 100% !important;
+                    display: flex !important;
+                    flex-direction: column !important;
+                    align-items: center !important;
+                    justify-content: center !important;
+                    font-size: 56px !important;
+                    font-weight: 900 !important;
+                    color: rgba(255,255,255,0.7) !important;
+                    background: linear-gradient(135deg, hsl(${hue}, 45%, 32%), hsl(${(hue + 45) % 360}, 50%, 18%)) !important;
+                    z-index: 1 !important;
+                    opacity: 0 !important;
+                    transition: opacity 0.25s ease !important;
+                    text-shadow: 0 4px 12px rgba(0,0,0,0.3) !important;
+                `;
+                placeholder.innerText = firstChar;
+                card.appendChild(placeholder);
+
+                img = document.createElement("img");
+                img.style.cssText = `
+                    position: absolute;
+                    top: 0;
+                    left: 0;
+                    width: 100%;
+                    height: 100%;
+                    object-fit: cover;
+                    z-index: 2;
+                    opacity: 0;
+                    transition: opacity 0.3s cubic-bezier(0.4, 0, 0.2, 1), transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+                `;
+                img.loading = "lazy";
+                
+                const partition = item.p || 1;
+                img.src = getImgUrl(partition, item.id);
+                
+                let loader = null;
+                if (img.complete && img.naturalWidth !== 0) {
+                    img.style.opacity = "1";
+                } else {
+                    loader = document.createElement("div");
+                    loader.className = "anima-shimmer";
+                    const spinner = document.createElement("div");
+                    spinner.className = "anima-spinner";
+                    loader.appendChild(spinner);
+                    card.appendChild(loader);
+                }
+                
+                img.onload = () => {
+                    img.style.opacity = "1";
+                    loader?.remove();
+                };
+                img.onerror = () => {
+                    img.style.display = "none";
+                    loader?.remove();
+                    placeholder.style.opacity = "1"; 
+                };
+                card.appendChild(img);
             }
-            
-            img.onload = () => {
-                img.style.opacity = "1";
-                loader?.remove();
-            };
-            img.onerror = () => {
-                img.style.display = "none";
-                loader?.remove();
-                placeholder.style.opacity = "1"; 
-            };
-            card.appendChild(img);
 
             const mask = document.createElement("div");
             mask.style.cssText = `
@@ -1222,40 +2091,61 @@ function openArtistSelectorModal(node, tagsWidget) {
             `;
             
             const nameEl = document.createElement("div");
-            nameEl.innerText = item.name.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
             nameEl.style.cssText = "font-size: 14px; font-weight: 800; color: #ffffff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-shadow: 0 2px 4px rgba(0,0,0,0.6);";
+            
+            const favInfo = item.isCustom ? item : favoriteMap.get(item.name);
+            const nickname = favInfo ? favInfo.nickname : "";
+            
+            if (item.isCustom) {
+                nameEl.innerText = item.nickname || item.name;
+            } else {
+                const displayName = item.name.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+                if (nickname) {
+                    nameEl.innerHTML = `${displayName} <span style="font-size:11px;color:#a7f3d0;font-weight:normal;display:block;margin-top:2px;overflow:hidden;text-overflow:ellipsis;">✏️ ${nickname}</span>`;
+                } else {
+                    nameEl.innerText = displayName;
+                }
+            }
             
             const statsContainer = document.createElement("div");
             statsContainer.style.cssText = "display: flex; align-items: center; justify-content: space-between; width: 100%; overflow: hidden; gap: 8px;";
             
-            const worksEl = document.createElement("span");
-            worksEl.innerText = `${item.post_count} w`;
-            worksEl.style.cssText = `
-                font-size: 10px;
-                font-weight: 700;
-                color: #38bdf8;
-                background: rgba(11, 140, 233, 0.15);
-                border: 1px solid rgba(11, 140, 233, 0.25);
-                padding: 2.5px 8px;
-                border-radius: 9999px;
-                white-space: nowrap;
-            `;
+            if (item.isCustom) {
+                const customPreview = document.createElement("span");
+                customPreview.innerText = item.customContent || "";
+                customPreview.style.cssText = "font-size: 11px; color: #9ca3af; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-family: monospace; max-width: 100%;";
+                statsContainer.appendChild(customPreview);
+            } else {
+                const worksEl = document.createElement("span");
+                worksEl.innerText = `${item.post_count} w`;
+                worksEl.style.cssText = `
+                    font-size: 10px;
+                    font-weight: 700;
+                    color: #38bdf8;
+                    background: rgba(11, 140, 233, 0.15);
+                    border: 1px solid rgba(11, 140, 233, 0.25);
+                    padding: 2.5px 8px;
+                    border-radius: 9999px;
+                    white-space: nowrap;
+                `;
+                
+                const uniqueEl = document.createElement("span");
+                uniqueEl.innerText = `${t("Uniqueness ")}${item.uniqueness_score.toFixed(1)}`;
+                uniqueEl.style.cssText = `
+                    font-size: 10.5px;
+                    color: #fbbf24;
+                    font-weight: 700;
+                    white-space: nowrap;
+                    background: rgba(251, 191, 36, 0.08);
+                    border: 1px solid rgba(251, 191, 36, 0.15);
+                    padding: 2px 6px;
+                    border-radius: 6px;
+                `;
+                
+                statsContainer.appendChild(worksEl);
+                statsContainer.appendChild(uniqueEl);
+            }
             
-            const uniqueEl = document.createElement("span");
-            uniqueEl.innerText = `${t("Uniqueness ")}${item.uniqueness_score.toFixed(1)}`;
-            uniqueEl.style.cssText = `
-                font-size: 10.5px;
-                color: #fbbf24;
-                font-weight: 700;
-                white-space: nowrap;
-                background: rgba(251, 191, 36, 0.08);
-                border: 1px solid rgba(251, 191, 36, 0.15);
-                padding: 2px 6px;
-                border-radius: 6px;
-            `;
-            
-            statsContainer.appendChild(worksEl);
-            statsContainer.appendChild(uniqueEl);
             infoPanel.appendChild(nameEl);
             infoPanel.appendChild(statsContainer);
             card.appendChild(infoPanel);
@@ -1290,7 +2180,9 @@ function openArtistSelectorModal(node, tagsWidget) {
                     card.style.borderColor = "rgba(11, 140, 233, 0.4)";
                     card.style.boxShadow = "0 10px 25px rgba(0, 0, 0, 0.4), 0 0 15px rgba(11, 140, 233, 0.15)";
                 }
-                img.style.transform = "scale(1.08)";
+                if (img) {
+                    img.style.transform = "scale(1.08)";
+                }
             };
             card.onmouseleave = () => {
                 if (!isSelected) {
@@ -1299,7 +2191,9 @@ function openArtistSelectorModal(node, tagsWidget) {
                 } else {
                     card.style.boxShadow = "0 10px 25px rgba(11, 140, 233, 0.35)";
                 }
-                img.style.transform = "none";
+                if (img) {
+                    img.style.transform = "none";
+                }
             };
 
             fragment.appendChild(card);

@@ -15,25 +15,20 @@ class AnimaArtistTagSelector:
     RETURN_NAMES = ("text",)
     FUNCTION = "process_tags"
     CATEGORY = "AnimaArt"
-
     def process_tags(self, artist_tags, mode, opt_prompt=""):
-        # 将逗号分割的 tags 解析为列表
         tags_list = [t.strip() for t in artist_tags.split(",") if t.strip()]
         processed_tags = []
-        
         for tag in tags_list:
+            if tag.startswith("_raw_:"):
+                processed_tags.append(tag[6:])
+                continue
             clean_tag = tag
-            # 剥离已存在的 @ 符号
             if clean_tag.startswith("@"):
                 clean_tag = clean_tag[1:].strip()
-            # 剥离可能存在的 by 前缀
             elif clean_tag.lower().startswith("by "):
                 clean_tag = clean_tag[3:].strip()
-            
             if clean_tag:
-                # 重新统一包装为 @画师名称
                 processed_tags.append(f"@{clean_tag}")
-        
         joined_artists = ", ".join(processed_tags)
 
         # 结合外部 prompt
@@ -84,6 +79,9 @@ class AnimaArtistTagSelectorPlus:
         processed_tags = []
         
         for tag in tags_list:
+            if tag.startswith("_raw_:"):
+                processed_tags.append(tag[6:])
+                continue
             clean_tag = tag
             if clean_tag.startswith("@"):
                 clean_tag = clean_tag[1:].strip()
@@ -140,6 +138,9 @@ class AnimaCharacterTagSelector:
         processed_tags = []
         
         for tag in tags_list:
+            if tag.startswith("_raw_:"):
+                processed_tags.append(tag[6:])
+                continue
             clean_tag = tag
             if clean_tag.startswith("@"):
                 clean_tag = clean_tag[1:].strip()
@@ -193,6 +194,9 @@ class AnimaCharacterTagSelectorPlus:
         processed_tags = []
         
         for tag in tags_list:
+            if tag.startswith("_raw_:"):
+                processed_tags.append(tag[6:])
+                continue
             clean_tag = tag
             if clean_tag.startswith("@"):
                 clean_tag = clean_tag[1:].strip()
@@ -232,3 +236,77 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "AnimaCharacterTagSelector": "Anima Character Tag Selector",
     "AnimaCharacterTagSelectorPlus": "Anima Character Tag Selector+"
 }
+
+# ----------------- 后端持久化 API 路由 -----------------
+import folder_paths
+from server import PromptServer
+from aiohttp import web
+import json
+import os
+
+def get_favorites_path():
+    try:
+        user_dir = folder_paths.get_user_directory()
+    except AttributeError:
+        # 降级方案：寻找 ComfyUI 根目录下的 user 文件夹
+        user_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "user"))
+        if not os.path.exists(user_dir):
+            user_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "user"))
+    
+    os.makedirs(user_dir, exist_ok=True)
+    return os.path.join(user_dir, "anima_tools_favorites.json")
+
+@PromptServer.instance.routes.get("/anima-tools/favorites")
+async def get_favorites_api(request):
+    path = get_favorites_path()
+    default_data = {
+        "artist": {
+            "groups": [{"id": "default", "name": "默认收藏", "isSystem": True}],
+            "items": []
+        },
+        "character": {
+            "groups": [{"id": "default", "name": "默认收藏", "isSystem": True}],
+            "items": []
+        }
+    }
+    
+    if not os.path.exists(path):
+        return web.json_response(default_data)
+        
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            if not isinstance(data, dict):
+                data = {}
+            for key in ["artist", "character"]:
+                if key not in data or not isinstance(data[key], dict):
+                    data[key] = default_data[key]
+                if "groups" not in data[key] or not isinstance(data[key]["groups"], list):
+                    data[key]["groups"] = default_data[key]["groups"]
+                if "items" not in data[key] or not isinstance(data[key]["items"], list):
+                    data[key]["items"] = []
+                # 确保默认收藏分组存在
+                if not any(g.get("id") == "default" for g in data[key]["groups"]):
+                    data[key]["groups"].insert(0, default_data[key]["groups"][0])
+            return web.json_response(data)
+    except Exception as e:
+        print(f"[Anima Tools] Error reading favorites: {e}")
+        return web.json_response(default_data)
+
+@PromptServer.instance.routes.post("/anima-tools/favorites")
+async def save_favorites_api(request):
+    try:
+        body = await request.json()
+        path = get_favorites_path()
+        
+        # 原子写入：先写入 .tmp 文件再覆盖
+        tmp_path = path + ".tmp"
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(body, f, indent=2, ensure_ascii=False)
+            
+        os.replace(tmp_path, path)
+        return web.json_response({"success": True})
+    except Exception as e:
+        print(f"[Anima Tools] Error saving favorites: {e}")
+        return web.json_response({"success": False, "error": str(e)}, status=500)
+
